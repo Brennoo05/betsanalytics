@@ -852,13 +852,17 @@
       </div>
       <div class="field-group full" id="statusFieldGroup" style="display:none;">
         <label class="form-label" for="mStatus">Resultado</label>
-        <select class="modal-select" id="mStatus">
+        <select class="modal-select" id="mStatus" onchange="toggleCashoutField()">
           <option value="Em Aberto">🔵 Em Aberto</option>
           <option value="Green">🟢 Green (Ganhou)</option>
           <option value="Red">🔴 Red (Perdeu)</option>
           <option value="Cash Out">💰 Cash Out</option>
           <option value="Anulada">⚪ Anulada</option>
         </select>
+      </div>
+      <div class="field-group full" id="cashoutFieldGroup" style="display:none;">
+        <label class="form-label" for="mCashout">Valor Recebido no Cash Out (R$)</label>
+        <input class="form-input" type="number" id="mCashout" placeholder="Ex: 150.00" step="0.01" min="0" oninput="updatePreview()" />
       </div>
     </div>
 
@@ -989,6 +993,7 @@ function rowToRecord(row) {
     fator:     parseFloat(row.odd)   || 1,
     valor:     parseFloat(row.stake) || 0,
     status:    row.status   || 'Em Aberto',
+    cashoutValor: (row.cashout !== null && row.cashout !== undefined) ? parseFloat(row.cashout) : null,
     createdAt: row.created_at || new Date().toISOString(),
   };
 }
@@ -1002,6 +1007,7 @@ function recordToRow(r) {
     stake:      r.valor  === '' || r.valor  == null ? null : Number(r.valor),
     status:     r.status,
     data:       r.data,
+    cashout:    (r.cashoutValor === undefined || r.cashoutValor === null || r.cashoutValor === '') ? null : Number(r.cashoutValor),
     created_at: r.createdAt
   };
 }
@@ -1207,7 +1213,12 @@ function initDashboard() {
 function betProfit(r) {
   if (r.status === 'Green') return (r.fator * r.valor) - r.valor;
   if (r.status === 'Red')   return -r.valor;
-  return 0; // Cash Out / Anulada / Em Aberto não entram no saldo (igual ao dashboard)
+  if (r.status === 'Cash Out') {
+    // Usa o valor recebido no cash out para calcular lucro/prejuízo real
+    const cashout = (r.cashoutValor !== undefined && r.cashoutValor !== null) ? r.cashoutValor : r.valor;
+    return cashout - r.valor;
+  }
+  return 0; // Anulada / Em Aberto não entram no saldo
 }
 
 function calcStats() {
@@ -1450,7 +1461,7 @@ function showDayDetail(dateStr) {
     const retorno = r.status === 'Green'
       ? r.fator * r.valor
       : r.status === 'Red' ? 0
-      : r.status === 'Cash Out' ? r.valor
+      : r.status === 'Cash Out' ? ((r.cashoutValor !== undefined && r.cashoutValor !== null) ? r.cashoutValor : r.valor)
       : r.status === 'Anulada'  ? r.valor : '—';
     const retStr = typeof retorno === 'number' ? fmtMoney(retorno) : retorno;
     return `<tr>
@@ -1511,12 +1522,16 @@ function renderTable() {
 }
 
 function buildTableRow(r) {
+  const profit = betProfit(r);
   const retorno = r.status === 'Green'
     ? r.fator * r.valor
     : r.status === 'Red' ? 0
-    : r.status === 'Cash Out' ? r.valor
+    : r.status === 'Cash Out' ? ((r.cashoutValor !== undefined && r.cashoutValor !== null) ? r.cashoutValor : r.valor)
     : r.status === 'Anulada'  ? r.valor : '—';
   const retStr = typeof retorno === 'number' ? fmtMoney(retorno) : retorno;
+  const retColor = (r.status === 'Green' || r.status === 'Cash Out')
+    ? (profit >= 0 ? '#00ff88' : '#ff2d78')
+    : (r.status === 'Red' ? '#ff2d78' : '#64748b');
   const badgeCls = badgeClass(r.status);
   const isOpen = r.status === 'Em Aberto';
 
@@ -1526,7 +1541,7 @@ function buildTableRow(r) {
     <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.descricao)}">${esc(r.descricao)}</td>
     <td style="color:#8b5cf6;font-weight:700;">${Number(r.fator).toFixed(2)}</td>
     <td style="font-weight:600;color:#e2e8f0;">${fmtMoney(r.valor)}</td>
-    <td style="font-weight:700;color:${r.status==='Green'?'#00ff88':r.status==='Red'?'#ff2d78':'#64748b'};">${retStr}</td>
+    <td style="font-weight:700;color:${retColor};">${retStr}</td>
     <td><span class="status-badge ${badgeCls}">${r.status}</span></td>
     <td>
       <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -1548,12 +1563,15 @@ function buildTableRow(r) {
 function buildMobileCard(r) {
   const isOpen = r.status === 'Em Aberto';
   const badgeCls = badgeClass(r.status);
+  const profit = betProfit(r);
   const retorno = r.status === 'Green'
     ? fmtMoney(r.fator * r.valor)
     : r.status === 'Red' ? fmtMoney(0)
-    : r.status === 'Cash Out' ? fmtMoney(r.valor)
+    : r.status === 'Cash Out' ? fmtMoney((r.cashoutValor !== undefined && r.cashoutValor !== null) ? r.cashoutValor : r.valor)
     : r.status === 'Anulada'  ? fmtMoney(r.valor) : '—';
-  const retColor = r.status === 'Green' ? '#00ff88' : r.status === 'Red' ? '#ff2d78' : '#64748b';
+  const retColor = (r.status === 'Green' || r.status === 'Cash Out')
+    ? (profit >= 0 ? '#00ff88' : '#ff2d78')
+    : (r.status === 'Red' ? '#ff2d78' : '#64748b');
 
   return `
   <div class="card-bet">
@@ -1639,7 +1657,9 @@ function openModal() {
   document.getElementById('mDescricao').value = '';
   document.getElementById('mFator').value     = '';
   document.getElementById('mValor').value     = '';
+  document.getElementById('mCashout').value   = '';
   document.getElementById('statusFieldGroup').style.display = 'none';
+  document.getElementById('cashoutFieldGroup').style.display = 'none';
   document.getElementById('modalPreview').style.display     = 'none';
   document.getElementById('btnSaveText').textContent = 'Confirmar e Salvar';
   setDefaultDate();
@@ -1662,7 +1682,9 @@ function openEditModal(id) {
   document.getElementById('mFator').value     = r.fator     || '';
   document.getElementById('mValor').value     = r.valor     || '';
   document.getElementById('mStatus').value    = r.status    || 'Em Aberto';
+  document.getElementById('mCashout').value   = (r.cashoutValor !== undefined && r.cashoutValor !== null) ? r.cashoutValor : '';
   document.getElementById('statusFieldGroup').style.display = 'block';
+  toggleCashoutField();
   document.getElementById('btnSaveText').textContent = 'Salvar Alterações';
   updatePreview();
   updateSuggestions();
@@ -1674,16 +1696,36 @@ function closeModal() {
   editingId = null;
 }
 
+function toggleCashoutField() {
+  const status = document.getElementById('mStatus').value;
+  document.getElementById('cashoutFieldGroup').style.display = status === 'Cash Out' ? 'block' : 'none';
+  updatePreview();
+}
+
 function updatePreview() {
   const fator = parseFloat(document.getElementById('mFator').value) || 0;
   const valor = parseFloat(document.getElementById('mValor').value) || 0;
   const prevEl = document.getElementById('modalPreview');
-  if (fator > 0 && valor > 0) {
+  const statusEl = document.getElementById('mStatus');
+  const statusVisible = document.getElementById('statusFieldGroup').style.display !== 'none';
+  const isCashOut = statusEl && statusVisible && statusEl.value === 'Cash Out';
+  const cashoutInput = document.getElementById('mCashout').value;
+
+  if (isCashOut && cashoutInput !== '' && valor > 0) {
+    const cashout = parseFloat(cashoutInput) || 0;
+    const lucro   = cashout - valor;
+    document.getElementById('prevValor').textContent   = fmtMoney(valor);
+    document.getElementById('prevRetorno').textContent = fmtMoney(cashout);
+    document.getElementById('prevLucro').textContent   = fmtMoney(lucro);
+    document.getElementById('prevLucro').style.color   = lucro >= 0 ? '#00ff88' : '#ff2d78';
+    prevEl.style.display = 'block';
+  } else if (!isCashOut && fator > 0 && valor > 0) {
     const retorno = fator * valor;
     const lucro   = retorno - valor;
     document.getElementById('prevValor').textContent   = fmtMoney(valor);
     document.getElementById('prevRetorno').textContent = fmtMoney(retorno);
     document.getElementById('prevLucro').textContent   = fmtMoney(lucro);
+    document.getElementById('prevLucro').style.color   = '#00ff88';
     prevEl.style.display = 'block';
   } else {
     prevEl.style.display = 'none';
@@ -1704,6 +1746,13 @@ async function saveEntry() {
   if (!valor || valor <= 0)   { showToast('Informe uma Stake válida (> 0).', 'error'); return; }
   if (!data) { showToast('Informe a Data.', 'error'); return; }
 
+  let cashoutValor = null;
+  if (status === 'Cash Out') {
+    const cVal = parseFloat(document.getElementById('mCashout').value);
+    if (isNaN(cVal) || cVal < 0) { showToast('Informe o valor recebido no Cash Out.', 'error'); return; }
+    cashoutValor = cVal;
+  }
+
   const btn = document.getElementById('btnSave');
   btn.disabled = true;
   document.getElementById('btnSaveText').textContent = 'Salvando...';
@@ -1717,12 +1766,13 @@ async function saveEntry() {
       stake:      valor,
       status:     status,
       data:       data,
+      cashout:    cashoutValor,
     };
     const ok = supabaseClient ? await updateToCloud(editingId, payload) : true;
     if (ok) {
       const idx = records.findIndex(x => x.id === editingId);
       if (idx >= 0) {
-        records[idx] = { ...records[idx], categoria, descricao, fator, valor, data, status };
+        records[idx] = { ...records[idx], categoria, descricao, fator, valor, data, status, cashoutValor };
       }
       saveToCache();
       showToast('Aposta atualizada ✅', 'success');
@@ -1764,20 +1814,40 @@ async function saveEntry() {
 async function quickStatus(id, newStatus) {
   const r = records.find(x => x.id === id);
   if (!r) return;
+
+  let cashoutValor = r.cashoutValor ?? null;
+  if (newStatus === 'Cash Out') {
+    const input = prompt(`Stake desta aposta: ${fmtMoney(r.valor)}\n\nInforme o valor TOTAL que você recebeu no Cash Out:`, r.cashoutValor != null ? r.cashoutValor : '');
+    if (input === null) return; // cancelou, não altera nada
+    const val = parseFloat(String(input).replace(',', '.'));
+    if (isNaN(val) || val < 0) { showToast('Valor de Cash Out inválido.', 'error'); return; }
+    cashoutValor = val;
+  } else {
+    cashoutValor = null; // outros status não usam valor de cashout
+  }
+
   const old = r.status;
+  const oldCashout = r.cashoutValor;
   r.status = newStatus;
+  r.cashoutValor = cashoutValor;
   renderTable();
   calcStats();
 
-  const payload = { status: newStatus };
+  const payload = { status: newStatus, cashout: cashoutValor };
   if (supabaseClient) {
     const ok = await updateToCloud(id, payload);
-    if (!ok) { r.status = old; renderTable(); calcStats(); return; }
+    if (!ok) { r.status = old; r.cashoutValor = oldCashout; renderTable(); calcStats(); return; }
   }
   saveToCache();
   renderCharts();
   renderCalendar();
-  showToast(`Status alterado para ${newStatus} ✅`, 'success');
+
+  if (newStatus === 'Cash Out') {
+    const lucro = cashoutValor - r.valor;
+    showToast(`Cash Out registrado: ${lucro >= 0 ? 'lucro' : 'prejuízo'} de ${fmtMoney(Math.abs(lucro))} ✅`, lucro >= 0 ? 'success' : 'info');
+  } else {
+    showToast(`Status alterado para ${newStatus} ✅`, 'success');
+  }
 }
 
 /* ═══════════════════════════════════════════════════
